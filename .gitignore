@@ -1,0 +1,10 @@
+# macOS
+.DS_Store
+
+# Generated output bundles
+*.icon/
+!Podcasts.icon/
+
+# Python
+__pycache__/
+*.pyc
