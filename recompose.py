@@ -20,6 +20,7 @@ from lib.composer import build_icon_composer_doc
 from lib.assets import (
     filter_and_copy_assets,
     find_prerendered_icon,
+    flatten_svg_groups,
     reframe_assets,
     resolve_layer_filenames,
 )
@@ -147,6 +148,15 @@ def main() -> None:
     reframed = reframe_assets(catalog, group_specs, assets_dir, layer_filenames)
     if reframed:
         print(f"Reframed {reframed} asset(s) for canvas positioning")
+
+    # Flatten multi-layer SVG groups into single composite SVGs.
+    # Icon Composer applies glass/material per-layer independently, which
+    # washes out color differences between overlapping layers.  Merging
+    # SVGs into one file matches the catalog compositor's "composite first,
+    # then apply effects" behavior.
+    merged = flatten_svg_groups(group_specs, assets_dir, layer_filenames)
+    if merged:
+        print(f"Flattened {merged} multi-layer SVG group(s)")
 
     doc = build_icon_composer_doc(catalog, icon_name, assets_dir, color_lookup, gradient_lookup, layer_filenames, group_specs)
 

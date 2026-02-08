@@ -338,6 +338,124 @@ def filter_and_copy_assets(
 _LIGHT_APPEARANCES = {"", "UIAppearanceAny", "NSAppearanceNameSystem"}
 
 
+# ---------------------------------------------------------------------------
+# SVG group flattening
+# ---------------------------------------------------------------------------
+
+_SVG_INNER_RE = re.compile(r'<svg[^>]*>(.*)</svg>', re.DOTALL)
+
+
+def flatten_svg_groups(
+    group_specs: list,
+    assets_dir: str,
+    layer_filenames: dict[str, str],
+) -> int:
+    """Merge multi-layer SVG groups into single composite SVGs.
+
+    Icon Composer applies glass/material effects per-layer independently.
+    When a group has multiple layers with overlapping opaque fills, the
+    per-layer glass rendering washes out color differences between layers.
+
+    The original catalog compositor composites all layers in a group first,
+    then applies group-level effects.  To match this behavior, we merge
+    SVG layers into a single SVG so the glass effect is applied to the
+    composite.
+
+    Layers with opacity=0 (hidden appearance variants) are excluded from
+    the merge.  Layers with fractional opacity get an SVG <g opacity="X">
+    wrapper.
+
+    Returns the number of groups flattened.
+    """
+    flattened = 0
+
+    for gs in group_specs:
+        # Collect visible SVG layers (default opacity > 0)
+        svg_layers: list[tuple] = []  # (LayerSpec, filename, opacity)
+        has_non_svg = False
+        for ls in gs.layers:
+            fn = layer_filenames.get(ls.vector_name)
+            if not fn:
+                continue
+            if not fn.lower().endswith('.svg'):
+                has_non_svg = True
+                continue
+            if ls.default_opacity == 0:
+                continue  # Hidden in default appearance
+            svg_layers.append((ls, fn, ls.default_opacity))
+
+        if len(svg_layers) <= 1 or has_non_svg:
+            continue  # Nothing to merge, or mixed SVG/PNG group
+
+        # Deduplicate: skip layers pointing to the same file
+        seen_files: set[str] = set()
+        unique_layers: list[tuple] = []
+        for ls, fn, opacity in svg_layers:
+            if fn not in seen_files:
+                seen_files.add(fn)
+                unique_layers.append((ls, fn, opacity))
+        svg_layers = unique_layers
+
+        if len(svg_layers) <= 1:
+            continue
+
+        # Extract and merge SVG inner content
+        parts: list[str] = []
+        for ls, fn, opacity in svg_layers:
+            path = os.path.join(assets_dir, fn)
+            try:
+                with open(path) as f:
+                    svg_content = f.read()
+            except OSError:
+                continue
+            match = _SVG_INNER_RE.search(svg_content)
+            if not match:
+                continue
+            inner = match.group(1).strip()
+            if not inner:
+                continue
+            if opacity < 1.0:
+                inner = f' <g opacity="{opacity}">\n{inner}\n </g>'
+            parts.append(inner)
+
+        if len(parts) <= 1:
+            continue  # Couldn't extract enough SVG content
+
+        merged_svg = (
+            '<?xml version="1.0" encoding="UTF-8"?>\n'
+            '<svg version="1.1" xmlns="http://www.w3.org/2000/svg" '
+            'xmlns:xlink="http://www.w3.org/1999/xlink" '
+            'viewBox="0 0 1024 1024">\n'
+            + '\n'.join(parts)
+            + '\n</svg>\n'
+        )
+
+        # Save merged SVG
+        group_suffix = gs.group_name.split('/')[-1].replace(' ', '_').lower()
+        merged_filename = f'{group_suffix}_merged.svg'
+        merged_path = os.path.join(assets_dir, merged_filename)
+        with open(merged_path, 'w') as f:
+            f.write(merged_svg)
+
+        # Update the first visible layer to point to the merged SVG
+        first_ls = svg_layers[0][0]
+        layer_filenames[first_ls.vector_name] = merged_filename
+
+        # If first layer had fractional opacity, clear it (now baked into SVG)
+        if first_ls.default_opacity < 1.0 and first_ls.default_opacity > 0:
+            first_ls.default_opacity = 1.0
+
+        # Remove the other merged layers from the group and layer_filenames
+        merged_names = {ls.vector_name for ls, _, _ in svg_layers[1:]}
+        gs.layers = [ls for ls in gs.layers if ls.vector_name not in merged_names]
+        for name in merged_names:
+            layer_filenames.pop(name, None)
+
+        flattened += 1
+
+    return flattened
+
+
 def reframe_assets(
     catalog: list,
     group_specs: list,

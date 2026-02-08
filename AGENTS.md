@@ -24,7 +24,7 @@ After any change to the pipeline scripts or Python modules, run the smoke test. 
 |-----|-------|----------|
 | Script Editor | 85 | Clean composable (happy-path baseline, 4 groups / 4 layers) |
 | Preview | 74 | `bitmap_appearance_variant` + `orphaned_asset` (8 discrepancies, dark + tinted) |
-| Games | 61 | `orphaned_asset` + `unmatched_catalog_layer` (4 discrepancies, 22 layers, most complex) |
+| Games | 68 | `orphaned_asset` + `unmatched_catalog_layer` (10 discrepancies, 21 layers, most complex, 3 groups flattened) |
 | Dictionary | 64 | `orphaned_asset` + `locale_variant_unused` (2 discrepancies, 9 locale glyph variants, 2 groups / 2 layers) |
 | Boot Camp Assistant | 34 | `legacy_bitmap_fallback` (1 discrepancy, single-layer bitmap, non-composable path) |
 
@@ -53,7 +53,7 @@ Each run of `recompose.sh` executes these stages in order:
 3. FILTER & COPY      lib/assets.py: copy icon-related files into Assets/
 4. RESOLVE & BUILD    lib/assets.py + lib/composer.py: match layers to files,
                       rename to clean names, reframe inset bitmaps,
-                      generate icon.json
+                      flatten multi-layer SVG groups, generate icon.json
 5. DETECT ISSUES      lib/discrepancies.py: compare catalog vs icon.json
 6. SCORE              lib/scoring.py: visual comparison via perceptual hash
 ```
@@ -97,6 +97,9 @@ lib/
                         - find_asset_file_for_layer() — matches catalog names to files
                         - filter_and_copy_assets() — copies + deduplicates from act output
                         - resolve_layer_filenames() — matches + renames in one pass, returns mapping
+                        - flatten_svg_groups() — merges multi-layer SVG groups into single
+                          composite SVGs (Icon Composer applies glass per-layer independently;
+                          the catalog compositor composites first, so we pre-merge to match)
                         - reframe_assets() — repositions inset bitmaps within the canvas
 
   scoring.py          Visual fidelity scoring. Owns:
@@ -112,6 +115,7 @@ lib/
 | Goal                              | Start here                |
 |-----------------------------------|---------------------------|
 | Fix asset matching / missing files | `lib/assets.py`          |
+| Fix layer merging / glass rendering | `lib/assets.py` (`flatten_svg_groups`) |
 | Handle new catalog properties      | `lib/catalog.py`         |
 | Fix icon.json structure            | `lib/composer.py`        |
 | Improve visual scoring             | `lib/scoring.py`         |
@@ -159,6 +163,7 @@ These cannot be fixed by improving the code — they are fundamental constraints
 
 - **One image per layer**: Icon Composer does not support per-appearance image switching. Bitmap dark/tinted variants are lost.
 - **No locale support**: Icon Composer has no mechanism for locale-specific layer variants. Only one glyph can be selected (we pick Latin).
+- **Per-layer glass rendering**: Icon Composer applies glass/material effects independently per layer. The catalog compositor composites layers within a group first, then applies group-level effects. We work around this by merging multi-layer SVG groups into single composite SVGs (`flatten_svg_groups`). Groups mixing SVGs and PNGs cannot be merged this way.
 - **Shadow style mapping**: `LayerShadowStyle` values 2 ("layer-color"/Chromatic) and 3 ("neutral") are confirmed. Values 0 and 1 are not observed in practice. When shadow kind is `"none"`, the opacity value is ignored by Icon Composer.
 - **Legacy bitmap icons**: Pre-rendered icons (e.g. Boot Camp Assistant) produce a flat single-layer result with no composable structure.
 
