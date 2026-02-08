@@ -8,13 +8,13 @@
 #   Or: https://github.com/insidegui/AssetCatalogTinkerer (v2.9+ for SVG)
 #
 # Usage:
-#   ./extract_icon_json.sh /path/to/App.app
+#   ./recompose.sh /path/to/App.app
 #
 # Output is always <App Name>.icon in the current directory.
 #
 # Examples:
-#   ./extract_icon_json.sh /System/Applications/Podcasts.app   → Podcasts.icon/
-#   ./extract_icon_json.sh "/System/Applications/App Store.app" → App Store.icon/
+#   ./recompose.sh /System/Applications/Podcasts.app   → Podcasts.icon/
+#   ./recompose.sh "/System/Applications/App Store.app" → App Store.icon/
 #
 
 set -e
@@ -127,11 +127,25 @@ PY
 # --- Extract assets with act -----------------------------------------------
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-CONVERTER="$SCRIPT_DIR/catalog_to_icon_composer.py"
+CONVERTER="$SCRIPT_DIR/recompose.py"
 
 if [[ ! -f "$CONVERTER" ]]; then
   echo "error: converter not found: $CONVERTER" >&2
   exit 1
+fi
+
+# --- Compile thumbnail tool if needed --------------------------------------
+
+THUMBNAIL_BIN="$SCRIPT_DIR/thumbnail"
+THUMBNAIL_SRC="$SCRIPT_DIR/thumbnail.swift"
+
+if [[ -f "$THUMBNAIL_SRC" ]]; then
+  if [[ ! -x "$THUMBNAIL_BIN" ]] || [[ "$THUMBNAIL_SRC" -nt "$THUMBNAIL_BIN" ]]; then
+    echo "Compiling thumbnail tool ..."
+    swiftc "$THUMBNAIL_SRC" \
+      -framework QuickLookThumbnailing -framework AppKit \
+      -o "$THUMBNAIL_BIN"
+  fi
 fi
 
 TMP_EXTRACT=$(mktemp -d)
@@ -148,6 +162,7 @@ fi
 python3 "$CONVERTER" \
   --icon-name "$ICON_NAME" \
   --extracted-dir "$TMP_EXTRACT" \
+  --app-path "$APP_PATH" \
   "$ICON_BUNDLE"
 
 echo "Created .icon bundle: $ICON_BUNDLE"

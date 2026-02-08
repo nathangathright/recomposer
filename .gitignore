@@ -1,9 +1,11 @@
 # macOS
 .DS_Store
 
-# Generated output bundles
-*.icon/
-!Podcasts.icon/
+# Batch output directory
+output/
+
+# Compiled Swift binary
+thumbnail
 
 # Python
 __pycache__/
