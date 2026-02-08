@@ -25,65 +25,55 @@ def find_asset_file_for_layer(layer_name: str, icon_name: str, asset_files: list
     def normalize(s: str) -> str:
         return s.lower().replace(" ", "_").replace("/", "_")
 
+    # --- Primary: match via RenditionName stem from catalog metadata ---
+    # The rendition_lookup maps layer Name -> RenditionName stem, which is
+    # the authoritative filename that act uses for extracted files.
+    if rendition_lookup and layer_name in rendition_lookup:
+        rendition_stem = normalize(rendition_lookup[layer_name])
+        # Exact rendition match
+        for f in asset_files:
+            base, _ = os.path.splitext(f)
+            if normalize(base) == rendition_stem:
+                return f
+        # Prefix match (act may insert _Normal between stem and @Nx)
+        for f in asset_files:
+            base, _ = os.path.splitext(f)
+            base_norm = normalize(base)
+            if base_norm.startswith(rendition_stem + "_") or base_norm.startswith(rendition_stem.replace("@", "_")):
+                return f
+        # Also try without @Nx scale suffix
+        no_scale = re.sub(r'@\d+x$', '', rendition_stem)
+        if no_scale != rendition_stem:
+            for f in asset_files:
+                base, _ = os.path.splitext(f)
+                base_norm = normalize(base)
+                if base_norm.startswith(no_scale + "_"):
+                    return f
+
+    # --- Fallback: match by layer display name ---
     if layer_name == icon_name:
         # Main app icon image: look for filename containing "AppIcon" or "welcome"
         for f in asset_files:
             base, _ = os.path.splitext(f)
             if "appicon" in normalize(base) or "welcome" in normalize(base):
                 return f
-        # Fallback to rendition lookup for legacy bitmap icons
-        if rendition_lookup and layer_name in rendition_lookup:
-            rendition_stem = normalize(rendition_lookup[layer_name])
-            for f in asset_files:
-                base, _ = os.path.splitext(f)
-                if normalize(base) == rendition_stem:
-                    return f
-            # Prefix match (act may insert _Normal between stem and @Nx)
-            for f in asset_files:
-                base, _ = os.path.splitext(f)
-                base_norm = normalize(base)
-                if base_norm.startswith(rendition_stem + "_") or base_norm.startswith(rendition_stem.replace("@", "_")):
-                    return f
-            # Also try without @Nx scale suffix
-            no_scale = re.sub(r'@\d+x$', '', rendition_stem)
-            if no_scale != rendition_stem:
-                for f in asset_files:
-                    base, _ = os.path.splitext(f)
-                    base_norm = normalize(base)
-                    if base_norm.startswith(no_scale + "_"):
-                        return f
         return None
 
     suffix = layer_name[len(icon_name) + 1:] if layer_name.startswith(icon_name + "/") else layer_name
     norm_suffix = normalize(suffix)
 
-    # Pass 1: exact match (highest priority)
+    # Exact name match
     for f in asset_files:
         base, ext = os.path.splitext(f)
         if normalize(base) == norm_suffix:
             return f
 
-    # Pass 2: prefix/suffix match
+    # Prefix/suffix match
     for f in asset_files:
         base, ext = os.path.splitext(f)
         base_norm = normalize(base)
         if base_norm.startswith(norm_suffix + "_") or base_norm.endswith("_" + norm_suffix):
             return f
-
-    # Fallback: match via RenditionName stem from catalog metadata
-    if rendition_lookup and layer_name in rendition_lookup:
-        rendition_stem = normalize(rendition_lookup[layer_name])
-        # Exact rendition match first
-        for f in asset_files:
-            base, ext = os.path.splitext(f)
-            if normalize(base) == rendition_stem:
-                return f
-        # Prefix rendition match
-        for f in asset_files:
-            base, ext = os.path.splitext(f)
-            base_norm = normalize(base)
-            if base_norm.startswith(rendition_stem + "_"):
-                return f
 
     return None
 
@@ -131,8 +121,7 @@ def resolve_layer_filenames(
             if not filename:
                 continue
             # Compute simplified name from the layer's display name
-            display_name = ls.vector_name.split("/")[-1] if "/" in ls.vector_name else ls.vector_name
-            simple = simplify_asset_filename(display_name, filename)
+            simple = simplify_asset_filename(ls.display_name, filename)
             if simple != filename and simple not in used_names:
                 src = os.path.join(assets_dir, filename)
                 dst = os.path.join(assets_dir, simple)
@@ -207,15 +196,22 @@ def filter_and_copy_assets(
         isinstance(e, dict) and e.get("AssetType") in ("Vector", "Image")
         for e in catalog[1:]
     )
+    # Build set of layer names whose catalog AssetType is "Icon Image"
+    # (pre-rendered composites, not individual layer assets).
+    icon_image_names: set[str] = set()
+    for entry in catalog[1:]:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("AssetType") == "Icon Image":
+            n = entry.get("Name")
+            if n:
+                icon_image_names.add(n)
+
     for layer_name_key, stem in rendition_lookup.items():
         # Skip Icon Image renditions for composable apps — they are pre-rendered
         # composite icons, not individual layer assets.
-        if has_composable:
-            # Check if this stem came from an Icon Image entry (heuristic: the
-            # layer name matches icon_name exactly, not a sub-layer path)
-            is_icon_image_entry = (layer_name_key == icon_name)
-            if is_icon_image_entry:
-                continue
+        if has_composable and layer_name_key in icon_image_names:
+            continue
         signatures.add(stem)
 
     def normalize(s: str) -> str:

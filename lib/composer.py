@@ -8,11 +8,12 @@ and extracted asset files.
 import os
 
 from .catalog import (
-    color_components_to_string,
-    resolve_gradient_to_fill,
-    is_gray_gradient,
-    collect_groups_from_catalog,
+    APPEARANCE_MAP,
     LIGHT_APPEARANCES,
+    color_components_to_string,
+    collect_groups_from_catalog,
+    is_gray_gradient,
+    resolve_gradient_to_fill,
 )
 from .assets import find_asset_file_for_layer
 
@@ -27,13 +28,68 @@ def get_fill_from_catalog(
     """
     Derive Icon Composer root fill and fill-specializations.
 
-    Identifies background gradients by finding Named Gradients that are NOT
-    referenced by any layer's LayerGradientColorName. Gray gradients become
-    the tinted specialization; RGB gradients become the default fill.
+    Uses IconImageStack entries to determine background gradients per
+    appearance.  The light/default stack's background gradient becomes
+    the root fill.  The dark stack's background gradient becomes the
+    tinted fill-specialization (providing the monochrome base for
+    tinted rendering), matching Icon Composer's convention.
+
+    Falls back to heuristic matching when no IconImageStack entries exist.
 
     Returns (fill_dict, fill_specializations_list).
     """
-    # Collect all gradient names referenced by layer fills across all appearances
+    prefix = icon_name + "/"
+
+    # --- Primary path: use IconImageStack appearance → gradient mapping ---
+    bg_gradient_by_appearance: dict[str, str] = {}
+    for entry in catalog[1:]:
+        if not isinstance(entry, dict) or entry.get("AssetType") != "IconImageStack":
+            continue
+        stack_appearance = entry.get("Appearance", "UIAppearanceAny")
+        for layer in entry.get("Layers") or []:
+            if not isinstance(layer, dict):
+                continue
+            # The background gradient is the first non-IconGroup layer
+            if layer.get("AssetType") == "IconGroup":
+                continue
+            name = layer.get("Name")
+            if name and name in gradient_lookup:
+                bg_gradient_by_appearance.setdefault(stack_appearance, name)
+            break  # only inspect the first non-IconGroup layer
+
+    if bg_gradient_by_appearance:
+        # Find the light/default background gradient
+        light_gradient: str | None = None
+        for app_key in bg_gradient_by_appearance:
+            if app_key in LIGHT_APPEARANCES:
+                light_gradient = bg_gradient_by_appearance[app_key]
+                break
+        if light_gradient is None:
+            # Fall back to first non-dark, non-tinted appearance
+            for app_key, gname in bg_gradient_by_appearance.items():
+                if APPEARANCE_MAP.get(app_key) is None:
+                    light_gradient = gname
+                    break
+
+        if light_gradient:
+            default_fill = resolve_gradient_to_fill(light_gradient, color_lookup, gradient_lookup)
+            if default_fill:
+                fill_specializations: list[dict] = []
+                # Dark stack's gradient → tinted fill-specialization
+                dark_gradient: str | None = None
+                for app_key, gname in bg_gradient_by_appearance.items():
+                    if APPEARANCE_MAP.get(app_key) == "dark":
+                        dark_gradient = gname
+                        break
+                if dark_gradient and dark_gradient != light_gradient:
+                    dark_resolved = resolve_gradient_to_fill(dark_gradient, color_lookup, gradient_lookup)
+                    if dark_resolved and dark_resolved != default_fill:
+                        fill_specializations.append({"appearance": "tinted", "value": dark_resolved})
+                return default_fill, fill_specializations
+
+    # --- Fallback: heuristic for icons without IconImageStack entries ---
+
+    # Collect all gradient names referenced by layer fills
     layer_fill_refs: set[str] = set()
     for entry in catalog[1:]:
         if not isinstance(entry, dict) or entry.get("AssetType") != "IconGroup":
@@ -45,15 +101,14 @@ def get_fill_from_catalog(
                     layer_fill_refs.add(ref)
 
     # Find unreferenced gradients — these are background fills
-    prefix = icon_name + "/"
     unreferenced: list[str] = []
     for name in gradient_lookup:
         if name.startswith(prefix) and name not in layer_fill_refs:
             unreferenced.append(name)
 
     # Classify: RGB gradients -> default fill, gray gradients -> tinted specialization
-    default_fill: dict | None = None
-    fill_specializations: list[dict] = []
+    default_fill = None
+    fill_specializations = []
     for gname in unreferenced:
         resolved = resolve_gradient_to_fill(gname, color_lookup, gradient_lookup)
         if not resolved:
@@ -161,10 +216,9 @@ def build_icon_composer_doc(
                 filename = find_asset_file_for_layer(ls.vector_name, icon_name, asset_files, rendition_lookup)
             if not filename:
                 continue
-            display_name = ls.vector_name.split("/")[-1] if "/" in ls.vector_name else ls.vector_name
             layer: dict = {
                 "image-name": filename,
-                "name": display_name,
+                "name": ls.display_name,
                 "glass": gs.specular,
             }
             # Default fill (from Light/Any appearance)
@@ -209,10 +263,19 @@ def build_icon_composer_doc(
         groups.append(group)
         total_layers += len(layers)
 
+    # Derive supported-platforms from catalog metadata when available.
+    # The metadata entry (catalog[0]) contains a "Platform" field:
+    #   "macosx"     — macOS-only apps (no watchOS circle support)
+    #   "macosx-ios" — multi-platform / Catalyst apps (include watchOS circles)
+    supported_platforms: dict = {"squares": "shared"}
+    platform = catalog[0].get("Platform", "") if catalog and isinstance(catalog[0], dict) else ""
+    if "ios" in platform:
+        supported_platforms["circles"] = ["watchOS"]
+
     doc: dict = {
         "fill": fill,
         "groups": groups,
-        "supported-platforms": {"circles": ["watchOS"], "squares": "shared"},
+        "supported-platforms": supported_platforms,
     }
     if fill_specializations:
         doc["fill-specializations"] = fill_specializations

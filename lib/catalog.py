@@ -172,6 +172,11 @@ class LayerSpec:
         self.fill_specializations: dict[str, str] = {}   # appearance -> fill_ref (non-None only)
         self.opacity_specializations: dict[str, float] = {}     # appearance -> opacity
 
+    @property
+    def display_name(self) -> str:
+        """Layer display name: the last path segment of vector_name."""
+        return self.vector_name.rsplit("/", 1)[-1]
+
 
 class GroupSpec:
     """One Icon Composer group: layers + shadow/translucency/glass/specular/blur metadata."""
