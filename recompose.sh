@@ -134,7 +134,7 @@ if [[ ! -f "$CONVERTER" ]]; then
   exit 1
 fi
 
-# --- Compile thumbnail tool if needed --------------------------------------
+# --- Compile helper tools if needed ----------------------------------------
 
 THUMBNAIL_BIN="$SCRIPT_DIR/thumbnail"
 THUMBNAIL_SRC="$SCRIPT_DIR/thumbnail.swift"
@@ -145,6 +145,18 @@ if [[ -f "$THUMBNAIL_SRC" ]]; then
     swiftc "$THUMBNAIL_SRC" \
       -framework QuickLookThumbnailing -framework AppKit \
       -o "$THUMBNAIL_BIN"
+  fi
+fi
+
+REFRAME_BIN="$SCRIPT_DIR/reframe"
+REFRAME_SRC="$SCRIPT_DIR/reframe.swift"
+
+if [[ -f "$REFRAME_SRC" ]]; then
+  if [[ ! -x "$REFRAME_BIN" ]] || [[ "$REFRAME_SRC" -nt "$REFRAME_BIN" ]]; then
+    echo "Compiling reframe tool ..."
+    swiftc "$REFRAME_SRC" \
+      -framework AppKit \
+      -o "$REFRAME_BIN"
   fi
 fi
 

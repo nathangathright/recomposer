@@ -21,6 +21,7 @@ from lib.composer import build_icon_composer_doc
 from lib.assets import (
     filter_and_copy_assets,
     find_prerendered_icon,
+    reframe_assets,
     resolve_layer_filenames,
 )
 from lib.scoring import score_visual_fidelity
@@ -143,6 +144,12 @@ def main() -> None:
         sys.exit(1)
 
     layer_filenames, group_specs = resolve_layer_filenames(catalog, icon_name, assets_dir, rendition_lookup)
+
+    # Reframe bitmap assets that need repositioning within the canvas
+    reframed = reframe_assets(catalog, group_specs, assets_dir, layer_filenames)
+    if reframed:
+        print(f"Reframed {reframed} asset(s) for canvas positioning")
+
     doc = build_icon_composer_doc(catalog, icon_name, assets_dir, color_lookup, gradient_lookup, rendition_lookup, layer_filenames, group_specs)
 
     out_path = os.path.join(bundle_dir, "icon.json")

@@ -171,6 +171,8 @@ class LayerSpec:
         self.default_opacity: float = 1.0
         self.fill_specializations: dict[str, str] = {}   # appearance -> fill_ref (non-None only)
         self.opacity_specializations: dict[str, float] = {}     # appearance -> opacity
+        self.layer_position: str | None = None  # "x,y" from catalog (canvas-relative)
+        self.layer_size: str | None = None      # "w,h" from catalog (display size)
 
     @property
     def display_name(self) -> str:
@@ -196,6 +198,17 @@ class GroupSpec:
 # Group & layer collection
 # ---------------------------------------------------------------------------
 
+def get_canvas_size(catalog: list) -> tuple[int, int]:
+    """Get canvas size from the first IconImageStack entry (default 1024x1024)."""
+    for entry in catalog[1:]:
+        if not isinstance(entry, dict) or entry.get("AssetType") != "IconImageStack":
+            continue
+        w = entry.get("CanvasWidth", 1024)
+        h = entry.get("CanvasHeight", 1024)
+        return (int(w), int(h))
+    return (1024, 1024)
+
+
 def collect_groups_from_catalog(catalog: list, icon_name: str) -> list[GroupSpec]:
     """
     Collect ordered GroupSpecs from the first IconImageStack.
@@ -207,6 +220,8 @@ def collect_groups_from_catalog(catalog: list, icon_name: str) -> list[GroupSpec
     group_appearance_layers: dict[str, dict[str, list[tuple[str, str | None, float]]]] = {}
     # Track which groups have only Image layers (no Vectors)
     group_has_vector: dict[str, bool] = {}
+    # Layer geometry: maps layer name -> (LayerPosition, LayerSize) from catalog
+    layer_geometry: dict[str, tuple[str | None, str | None]] = {}
     for entry in catalog[1:]:
         if not isinstance(entry, dict) or entry.get("AssetType") != "IconGroup":
             continue
@@ -227,6 +242,11 @@ def collect_groups_from_catalog(catalog: list, icon_name: str) -> list[GroupSpec
                     layer_entries.append((vn, fill_ref, opacity))
                     if at == "Vector":
                         group_has_vector[gname] = True
+                    # Collect layer geometry (position/size within canvas)
+                    if vn not in layer_geometry:
+                        position = inner.get("LayerPosition")
+                        size = inner.get("LayerSize")
+                        layer_geometry[vn] = (position, size)
         if layer_entries:
             group_appearance_layers.setdefault(gname, {})[appearance] = layer_entries
             group_has_vector.setdefault(gname, False)
@@ -248,6 +268,9 @@ def collect_groups_from_catalog(catalog: list, icon_name: str) -> list[GroupSpec
         specs: list[LayerSpec] = []
         for i, (vn, _, _) in enumerate(first_vecs):
             ls = LayerSpec(vn)
+            # Set layer geometry if available
+            if vn in layer_geometry:
+                ls.layer_position, ls.layer_size = layer_geometry[vn]
             # Pass 1: set defaults from Light/Any appearance
             for appearance, vecs in app_data.items():
                 if APPEARANCE_MAP.get(appearance) is not None:
@@ -358,6 +381,40 @@ def collect_groups_from_catalog(catalog: list, icon_name: str) -> list[GroupSpec
                 default_layer = next(iter(appearances.values()), None)
         if default_layer:
             _read_group_props(gs, default_layer)
+
+        # Apply group-level opacity from IconImageStack entries.
+        # The LayerOpacity on the IconGroup entry within each stack controls
+        # the group's overall visibility for that stack's appearance — separate
+        # from the per-layer opacity within the group itself.
+        default_group_opacity = 1.0
+        group_opacity_specs: dict[str, float] = {}
+        for app_name, layer_dict in appearances.items():
+            group_op = layer_dict.get("LayerOpacity", 1.0)
+            ic_appearance = APPEARANCE_MAP.get(app_name)
+            if app_name in LIGHT_APPEARANCES or ic_appearance is None:
+                default_group_opacity = group_op
+            elif ic_appearance:
+                group_opacity_specs[ic_appearance] = group_op
+
+        # Only modify layer opacities if any group opacity differs from 1.0
+        has_group_opacity_change = abs(default_group_opacity - 1.0) > 0.001
+        if not has_group_opacity_change:
+            for go in group_opacity_specs.values():
+                if abs(go - 1.0) > 0.001:
+                    has_group_opacity_change = True
+                    break
+
+        if has_group_opacity_change:
+            for ls in gs.layers:
+                original_default = ls.default_opacity
+                ls.default_opacity = original_default * default_group_opacity
+                for appearance, group_op in group_opacity_specs.items():
+                    layer_op = ls.opacity_specializations.get(appearance, original_default)
+                    effective = layer_op * group_op
+                    if abs(effective - ls.default_opacity) > 0.001:
+                        ls.opacity_specializations[appearance] = effective
+                    elif appearance in ls.opacity_specializations:
+                        del ls.opacity_specializations[appearance]
 
         groups.append(gs)
 

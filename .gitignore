@@ -10,8 +10,9 @@ reference.png
 # Batch output directory
 output/
 
-# Compiled Swift binary
+# Compiled Swift binaries
 thumbnail
+reframe
 
 # Python
 __pycache__/

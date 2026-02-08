@@ -22,7 +22,7 @@ After any change to the pipeline scripts or Python modules, run the smoke test. 
 
 | App | Score | Coverage |
 |-----|-------|----------|
-| Script Editor | 84 | Clean composable (happy-path baseline, 4 groups / 4 layers) |
+| Script Editor | 85 | Clean composable (happy-path baseline, 4 groups / 4 layers) |
 | Preview | 74 | `bitmap_appearance_variant` + `orphaned_asset` (8 discrepancies, dark + tinted) |
 | Games | 52 | `orphaned_asset` + `unmatched_catalog_layer` (4 discrepancies, 22 layers, most complex) |
 | Dictionary | 54 | `orphaned_asset` (1 discrepancy; locale glyphs handled silently, 2 groups / 2 layers) |
@@ -52,7 +52,8 @@ Each run of `recompose.sh` executes these stages in order:
 2. EXTRACT ASSETS     act extract -> temp dir of SVG/PNG/PDF files
 3. FILTER & COPY      lib/assets.py: copy icon-related files into Assets/
 4. RESOLVE & BUILD    lib/assets.py + lib/composer.py: match layers to files,
-                      rename to clean names, generate icon.json
+                      rename to clean names, reframe inset bitmaps,
+                      generate icon.json
 5. DETECT ISSUES      lib/discrepancies.py: compare catalog vs icon.json
 6. SCORE              lib/scoring.py: visual comparison via perceptual hash
 ```
@@ -73,13 +74,16 @@ recompose.py          CLI entry point: argument parsing + main() that
                       wires the pipeline stages together
 recompose_all.sh      Batch runner for all first-party macOS apps
 thumbnail.swift       QuickLook thumbnail generator (compiled on first run)
+reframe.swift         Bitmap repositioning within canvas (compiled on first run)
 
 lib/
   catalog.py          Catalog parsing. Owns:
                         - Color/gradient lookup builders
                         - LayerSpec / GroupSpec data classes
                         - collect_groups_from_catalog() — the core catalog walker
+                          (incl. group-level opacity from IconImageStack + layer geometry)
                         - build_rendition_lookup() — maps layer names to filenames
+                        - get_canvas_size() — canvas dimensions from IconImageStack
                         - Appearance constants (APPEARANCE_MAP, LIGHT_APPEARANCES)
 
   composer.py         Icon Composer document builder. Owns:
@@ -91,6 +95,7 @@ lib/
                         - find_asset_file_for_layer() — matches catalog names to files
                         - filter_and_copy_assets() — copies + deduplicates from act output
                         - resolve_layer_filenames() — matches + renames in one pass, returns mapping
+                        - reframe_assets() — repositions inset bitmaps within the canvas
 
   scoring.py          Visual fidelity scoring. Owns:
                         - score_visual_fidelity() — QuickLook + dHash comparison (0-100)

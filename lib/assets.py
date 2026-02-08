@@ -9,10 +9,13 @@ import hashlib
 import os
 import re
 import shutil
+import subprocess
+import sys
 
 from .catalog import (
     collect_groups_from_catalog,
     build_rendition_lookup,
+    get_canvas_size,
 )
 
 
@@ -339,6 +342,73 @@ def filter_and_copy_assets(
 
 # Light/default appearances used by pre-rendered Icon Images.
 _LIGHT_APPEARANCES = {"", "UIAppearanceAny", "NSAppearanceNameSystem"}
+
+
+def reframe_assets(
+    catalog: list,
+    group_specs: list,
+    assets_dir: str,
+    layer_filenames: dict[str, str],
+) -> int:
+    """Reframe bitmap assets that are positioned/sized within the canvas.
+
+    When a catalog layer has LayerPosition or LayerSize that don't fill the
+    full canvas, the extracted bitmap needs to be resized and repositioned
+    within a full-canvas transparent image so Icon Composer renders it correctly.
+
+    Returns the number of assets reframed.
+    """
+    canvas_w, canvas_h = get_canvas_size(catalog)
+
+    # Find the reframe binary (same directory as this package's parent)
+    script_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    reframe_bin = os.path.join(script_dir, "reframe")
+    if not os.path.isfile(reframe_bin):
+        return 0
+
+    reframed = 0
+    for gs in group_specs:
+        for ls in gs.layers:
+            if ls.layer_position is None or ls.layer_size is None:
+                continue
+
+            # Parse position and size
+            try:
+                px, py = [int(v) for v in ls.layer_position.split(",")]
+                sw, sh = [int(v) for v in ls.layer_size.split(",")]
+            except (ValueError, TypeError):
+                continue
+
+            # Skip layers that fill or extend beyond the canvas (bleed/overscan).
+            # Only reframe layers that are genuinely inset within the canvas.
+            if px < 0 or py < 0:
+                continue
+            if sw >= canvas_w and sh >= canvas_h:
+                continue
+            if px == 0 and py == 0 and sw == canvas_w and sh == canvas_h:
+                continue
+
+            # Only reframe bitmap files (PNGs), not SVGs
+            filename = layer_filenames.get(ls.vector_name)
+            if not filename or not filename.lower().endswith(".png"):
+                continue
+
+            filepath = os.path.join(assets_dir, filename)
+            if not os.path.isfile(filepath):
+                continue
+
+            result = subprocess.run(
+                [reframe_bin, filepath, filepath,
+                 str(canvas_w), str(canvas_h),
+                 str(px), str(py), str(sw), str(sh)],
+                capture_output=True, text=True,
+            )
+            if result.returncode == 0:
+                reframed += 1
+            else:
+                print(f"warning: reframe failed for {filename}: {result.stderr.strip()}", file=sys.stderr)
+
+    return reframed
 
 
 def find_prerendered_icon(
