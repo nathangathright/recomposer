@@ -59,9 +59,11 @@ Each run of `recompose.sh` executes these stages in order:
 ```
 
 Data is parsed once and threaded forward: `main()` computes lookups
-(`color_lookup`, `gradient_lookup`, `rendition_lookup`) and passes them
-to each stage. `resolve_layer_filenames()` returns both the filename
-mapping and the parsed `group_specs`, which are forwarded to
+(`color_lookup`, `gradient_lookup`) and passes them to each stage.
+Each `LayerSpec` carries its own `rendition_stem` (the RenditionName
+without extension), so layer-to-file matching is self-contained.
+`resolve_layer_filenames()` returns both the filename mapping and
+the parsed `group_specs`, which are forwarded to
 `build_icon_composer_doc()` and `collect_discrepancies()` so neither
 re-parses the catalog or re-matches layers.
 
@@ -79,10 +81,10 @@ reframe.swift         Bitmap repositioning within canvas (compiled on first run)
 lib/
   catalog.py          Catalog parsing. Owns:
                         - Color/gradient lookup builders (incl. sRGB → Display P3 conversion)
-                        - LayerSpec / GroupSpec data classes
+                        - LayerSpec / GroupSpec data classes (LayerSpec.rendition_stem
+                          carries the RenditionName stem for asset matching)
                         - collect_groups_from_catalog() — the core catalog walker
                           (incl. group-level opacity from IconImageStack + layer geometry)
-                        - build_rendition_lookup() — maps layer names to filenames
                         - get_canvas_size() — canvas dimensions from IconImageStack
                         - Appearance constants (APPEARANCE_MAP, LIGHT_APPEARANCES)
 

@@ -14,7 +14,6 @@ import sys
 
 from .catalog import (
     collect_groups_from_catalog,
-    build_rendition_lookup,
     get_canvas_size,
 )
 
@@ -23,16 +22,16 @@ from .catalog import (
 # Layer-to-file matching
 # ---------------------------------------------------------------------------
 
-def find_asset_file_for_layer(layer_name: str, icon_name: str, asset_files: list, rendition_lookup: dict[str, str] | None = None) -> str | None:
+def find_asset_file_for_layer(layer_name: str, icon_name: str, asset_files: list, rendition_stem: str | None = None) -> str | None:
     """Match a catalog layer name (e.g. AppIcon/1_person or AppIcon) to an actual filename in Assets/."""
     def normalize(s: str) -> str:
         return s.lower().replace(" ", "_").replace("/", "_")
 
     # --- Primary: match via RenditionName stem from catalog metadata ---
-    # The rendition_lookup maps layer Name -> RenditionName stem, which is
-    # the authoritative filename that act uses for extracted files.
-    if rendition_lookup and layer_name in rendition_lookup:
-        rendition_stem = normalize(rendition_lookup[layer_name])
+    # The rendition_stem is the authoritative filename stem that act uses
+    # for extracted files (provided per-layer from LayerSpec).
+    if rendition_stem:
+        rendition_stem = normalize(rendition_stem)
         # Exact rendition match
         for f in asset_files:
             base, _ = os.path.splitext(f)
@@ -42,7 +41,7 @@ def find_asset_file_for_layer(layer_name: str, icon_name: str, asset_files: list
         for f in asset_files:
             base, _ = os.path.splitext(f)
             base_norm = normalize(base)
-            if base_norm.startswith(rendition_stem + "_") or base_norm.startswith(rendition_stem.replace("@", "_")):
+            if base_norm.startswith(rendition_stem + "_") or ("@" in rendition_stem and base_norm.startswith(rendition_stem.replace("@", "_"))):
                 return f
         # Also try without @Nx scale suffix
         no_scale = re.sub(r'@\d+x$', '', rendition_stem)
@@ -51,6 +50,24 @@ def find_asset_file_for_layer(layer_name: str, icon_name: str, asset_files: list
                 base, _ = os.path.splitext(f)
                 base_norm = normalize(base)
                 if base_norm.startswith(no_scale + "_"):
+                    return f
+
+        # --- Variant fallback ---
+        # When a catalog layer has a variant suffix (e.g. ".mono", ".watch"),
+        # act extracts it as "{base}_unspecified_unspecified_automatic" instead
+        # of "{base}.{variant}".  Try stripping the last dotted segment from
+        # the rendition stem and matching against _unspecified files.
+        dot_idx = rendition_stem.rfind(".")
+        if dot_idx > 0:
+            stem_base = rendition_stem[:dot_idx]
+            uua_suffix = "_unspecified_unspecified_automatic"
+            for f in asset_files:
+                base, _ = os.path.splitext(f)
+                base_norm = normalize(base)
+                if base_norm == stem_base + uua_suffix:
+                    return f
+                # Also match with trailing _N dedup counter
+                if base_norm.startswith(stem_base + uua_suffix + "_"):
                     return f
 
     # --- Fallback: match by layer display name ---
@@ -97,7 +114,6 @@ def resolve_layer_filenames(
     catalog: list,
     icon_name: str,
     assets_dir: str,
-    rendition_lookup: dict[str, str] | None = None,
 ) -> tuple[dict[str, str], list]:
     """Match all layers to asset files and rename to clean names in one pass.
 
@@ -120,7 +136,7 @@ def resolve_layer_filenames(
 
     for gs in reversed(group_specs):
         for ls in gs.layers:
-            filename = find_asset_file_for_layer(ls.vector_name, icon_name, asset_files, rendition_lookup)
+            filename = find_asset_file_for_layer(ls.vector_name, icon_name, asset_files, ls.rendition_stem)
             if not filename:
                 continue
             # Compute simplified name from the layer's display name
@@ -159,7 +175,6 @@ def filter_and_copy_assets(
     icon_name: str,
     extracted_dir: str,
     assets_dir: str,
-    rendition_lookup: dict[str, str] | None = None,
 ) -> int:
     """
     Copy only icon-related assets from extracted_dir into assets_dir.
@@ -191,31 +206,10 @@ def filter_and_copy_assets(
 
     # Also add RenditionName stems so we match files even when the extracted
     # filename (derived from RenditionName) differs from the catalog layer name.
-    # Strip @Nx scale suffixes too, since act inserts _Normal between stem and @Nx.
-    if rendition_lookup is None:
-        rendition_lookup = build_rendition_lookup(catalog, icon_name)
-    # Check if this is a legacy bitmap-only icon (no composable Vector/Image layers)
-    has_composable = any(
-        isinstance(e, dict) and e.get("AssetType") in ("Vector", "Image")
-        for e in catalog[1:]
-    )
-    # Build set of layer names whose catalog AssetType is "Icon Image"
-    # (pre-rendered composites, not individual layer assets).
-    icon_image_names: set[str] = set()
-    for entry in catalog[1:]:
-        if not isinstance(entry, dict):
-            continue
-        if entry.get("AssetType") == "Icon Image":
-            n = entry.get("Name")
-            if n:
-                icon_image_names.add(n)
-
-    for layer_name_key, stem in rendition_lookup.items():
-        # Skip Icon Image renditions for composable apps — they are pre-rendered
-        # composite icons, not individual layer assets.
-        if has_composable and layer_name_key in icon_image_names:
-            continue
-        signatures.add(stem)
+    for gs in group_specs:
+        for ls in gs.layers:
+            if ls.rendition_stem:
+                signatures.add(ls.rendition_stem)
 
     def normalize(s: str) -> str:
         return s.lower().replace(" ", "_").replace("/", "_")

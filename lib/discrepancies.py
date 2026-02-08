@@ -29,7 +29,6 @@ def collect_discrepancies(
     icon_name: str,
     assets_dir: str,
     doc: dict,
-    rendition_lookup: dict[str, str] | None = None,
     layer_filenames: dict[str, str] | None = None,
 ) -> list[dict]:
     """Detect discrepancies between the catalog and the generated icon.json.
@@ -149,7 +148,7 @@ def collect_discrepancies(
                 if os.path.isfile(os.path.join(assets_dir, f)) and f.endswith((".png", ".pdf", ".svg"))
             ]
             for cl in all_catalog_layers:
-                match = find_asset_file_for_layer(cl, icon_name, asset_files, rendition_lookup)
+                match = find_asset_file_for_layer(cl, icon_name, asset_files)
                 if match and match in referenced_images:
                     matched_catalog_layers.add(cl)
 

@@ -184,7 +184,6 @@ def build_icon_composer_doc(
     assets_dir: str,
     color_lookup: dict,
     gradient_lookup: dict,
-    rendition_lookup: dict[str, str] | None = None,
     layer_filenames: dict[str, str] | None = None,
     group_specs: list | None = None,
 ) -> dict:
@@ -214,7 +213,7 @@ def build_icon_composer_doc(
             if layer_filenames is not None and ls.vector_name in layer_filenames:
                 filename = layer_filenames[ls.vector_name]
             else:
-                filename = find_asset_file_for_layer(ls.vector_name, icon_name, asset_files, rendition_lookup)
+                filename = find_asset_file_for_layer(ls.vector_name, icon_name, asset_files, ls.rendition_stem)
             if not filename:
                 continue
             layer: dict = {

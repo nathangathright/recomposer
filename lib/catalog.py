@@ -1,5 +1,5 @@
 """
-Catalog parsing: color/gradient lookups, group/layer collection, rendition lookup.
+Catalog parsing: color/gradient lookups, group/layer collection.
 
 Reads assetutil catalog JSON and extracts structured data about icon layers,
 appearances, colors, gradients, and rendition names.
@@ -215,6 +215,7 @@ class LayerSpec:
         self.opacity_specializations: dict[str, float] = {}     # appearance -> opacity
         self.layer_position: str | None = None  # "x,y" from catalog (canvas-relative)
         self.layer_size: str | None = None      # "w,h" from catalog (display size)
+        self.rendition_stem: str | None = None  # RenditionName stem (without extension)
 
     @property
     def display_name(self) -> str:
@@ -251,12 +252,79 @@ def get_canvas_size(catalog: list) -> tuple[int, int]:
     return (1024, 1024)
 
 
+_LOCALE_RE = re.compile(r'-([a-z]{2}(?:-[A-Za-z]+)?)$')
+
+
+def _select_best_stem(stems: list[str]) -> str | None:
+    """Pick the best RenditionName stem from a list (prefer Latin locale variant)."""
+    if not stems:
+        return None
+    unique = list(dict.fromkeys(stems))  # preserve order, deduplicate
+    if len(unique) == 1:
+        return unique[0]
+    # Check for locale pattern: stems like image-base-la, image-base-ja
+    for s in unique:
+        m = _LOCALE_RE.search(s)
+        if m and m.group(1) == 'la':
+            return s
+    return unique[0]
+
+
+def _build_rendition_stems(catalog: list, icon_name: str) -> dict[str, str | None]:
+    """Build a map of layer Name -> best RenditionName stem from catalog.
+
+    Walks top-level Vector/Image/Icon Image entries.  For layers with
+    locale-specific variants, the Latin stem is preferred.  For Icon Image
+    entries, the highest-resolution entry wins.
+
+    This is a local helper — the stems are stored directly on each
+    LayerSpec rather than threaded through the pipeline as a dict.
+    """
+    prefix = icon_name + "/"
+    all_stems: dict[str, list[str]] = {}
+    icon_image_best: dict[str, tuple[str, int]] = {}  # name -> (stem, pixels)
+    for entry in catalog[1:]:
+        if not isinstance(entry, dict):
+            continue
+        at = entry.get("AssetType")
+        if at not in ("Vector", "Image", "Icon Image"):
+            continue
+        name = entry.get("Name")
+        rn = entry.get("RenditionName")
+        if not name or not rn:
+            continue
+        if not name.startswith(prefix) and name != icon_name:
+            continue
+        stem, _ = os.path.splitext(rn)
+        if at == "Icon Image":
+            pw = entry.get("PixelWidth", 0)
+            ph = entry.get("PixelHeight", 0)
+            pixels = pw * ph
+            prev = icon_image_best.get(name)
+            if prev is None or pixels > prev[1]:
+                icon_image_best[name] = (stem, pixels)
+        else:
+            all_stems.setdefault(name, []).append(stem)
+
+    result: dict[str, str | None] = {}
+    # Icon Image entries first (lower priority — overridden by Vector/Image)
+    for name, (stem, _) in icon_image_best.items():
+        result[name] = stem
+    # Vector/Image entries override
+    for name, stems in all_stems.items():
+        result[name] = _select_best_stem(stems)
+    return result
+
+
 def collect_groups_from_catalog(catalog: list, icon_name: str) -> list[GroupSpec]:
     """
     Collect ordered GroupSpecs from the first IconImageStack.
     Each IconGroup in the stack becomes its own GroupSpec with glass/shadow/translucency
     and per-appearance fill refs and opacities for its vector layer(s).
     """
+    # Pre-pass: map layer Name -> best RenditionName stem
+    rendition_stems = _build_rendition_stems(catalog, icon_name)
+
     # Collect per-group, per-appearance layer info (both Vector and Image assets):
     # group_name -> { appearance -> [(layer_name, fill_ref, opacity)] }
     group_appearance_layers: dict[str, dict[str, list[tuple[str, str | None, float]]]] = {}
@@ -310,6 +378,7 @@ def collect_groups_from_catalog(catalog: list, icon_name: str) -> list[GroupSpec
         specs: list[LayerSpec] = []
         for i, (vn, _, _) in enumerate(first_vecs):
             ls = LayerSpec(vn)
+            ls.rendition_stem = rendition_stems.get(vn)
             # Set layer geometry if available
             if vn in layer_geometry:
                 ls.layer_position, ls.layer_size = layer_geometry[vn]
@@ -481,7 +550,9 @@ def collect_groups_from_catalog(catalog: list, icon_name: str) -> list[GroupSpec
                 if at in ("Vector", "Image"):
                     n = entry.get("Name")
                     if n:
-                        gs.layers.append(LayerSpec(n))
+                        ls = LayerSpec(n)
+                        ls.rendition_stem = rendition_stems.get(n)
+                        gs.layers.append(ls)
             if gs.layers:
                 groups.append(gs)
         else:
@@ -508,78 +579,10 @@ def collect_groups_from_catalog(catalog: list, icon_name: str) -> list[GroupSpec
                 gs.specular = False
                 gs.translucency_enabled = False
                 ls = LayerSpec(name)
+                ls.rendition_stem = os.path.splitext(rn)[0] if rn else None
                 gs.layers.append(ls)
                 groups.append(gs)
             else:
                 print(f"warning: {icon_name} is a legacy bitmap icon with no usable layers", file=sys.stderr)
 
     return groups
-
-
-# ---------------------------------------------------------------------------
-# Rendition lookup
-# ---------------------------------------------------------------------------
-
-def build_rendition_lookup(catalog: list, icon_name: str) -> dict[str, str]:
-    """Map catalog layer Name -> RenditionName stem for Vector/Image/Icon Image entries.
-
-    The stem is the RenditionName without extension (e.g. 'image-left-to-right-base').
-    act names extracted files as '{stem}_{attrs}.{ext}', so matching against the stem
-    lets us find files even when the layer Name bears no resemblance to the filename.
-
-    When a layer has locale-specific variants (e.g. image-base-la, image-base-ja),
-    prefer the Latin variant as the default.
-    """
-    lookup: dict[str, str] = {}
-    # Collect all stems per layer name to detect locale variants
-    all_stems: dict[str, list[str]] = {}
-    # For Icon Image entries, track pixel count so we prefer the highest resolution
-    icon_image_pixels: dict[str, int] = {}
-    prefix = icon_name + "/"
-    for entry in catalog[1:]:
-        if not isinstance(entry, dict):
-            continue
-        at = entry.get("AssetType")
-        if at not in ("Vector", "Image", "Icon Image"):
-            continue
-        name = entry.get("Name")
-        rn = entry.get("RenditionName")
-        if not name or not rn:
-            continue
-        if not name.startswith(prefix) and name != icon_name:
-            continue
-        stem, _ = os.path.splitext(rn)
-        if at == "Icon Image":
-            # Prefer the highest-resolution Icon Image entry
-            pw = entry.get("PixelWidth", 0)
-            ph = entry.get("PixelHeight", 0)
-            pixels = pw * ph
-            if pixels > icon_image_pixels.get(name, 0):
-                icon_image_pixels[name] = pixels
-                lookup[name] = stem
-        else:
-            all_stems.setdefault(name, []).append(stem)
-
-    # For Vector/Image entries, choose the best stem per layer name.
-    # If a layer has locale-specific variants (stems ending in -la, -ja, -zh, etc.),
-    # prefer the Latin variant (-la) as the default rendering.
-    _LOCALE_RE = re.compile(r'-([a-z]{2}(?:-[A-Za-z]+)?)$')
-    for name, stems in all_stems.items():
-        if name in lookup:
-            continue  # already set by Icon Image logic
-        unique_stems = list(dict.fromkeys(stems))  # preserve order, deduplicate
-        if len(unique_stems) == 1:
-            lookup[name] = unique_stems[0]
-        else:
-            # Check for locale pattern: stems like image-base-la, image-base-ja
-            latin_stem = None
-            for s in unique_stems:
-                m = _LOCALE_RE.search(s)
-                if m and m.group(1) == 'la':
-                    latin_stem = s
-                    break
-            if latin_stem:
-                lookup[name] = latin_stem
-            else:
-                lookup[name] = unique_stems[0]
-    return lookup

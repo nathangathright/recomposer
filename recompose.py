@@ -15,7 +15,6 @@ import sys
 from lib.catalog import (
     build_color_lookup,
     build_gradient_lookup,
-    build_rendition_lookup,
 )
 from lib.composer import build_icon_composer_doc
 from lib.assets import (
@@ -114,7 +113,6 @@ def main() -> None:
 
     color_lookup = build_color_lookup(catalog, icon_name)
     gradient_lookup = build_gradient_lookup(catalog)
-    rendition_lookup = build_rendition_lookup(catalog, icon_name)
 
     # Score-only mode: just compare existing .icon to .app visually
     if score_only:
@@ -131,7 +129,7 @@ def main() -> None:
             print(f"Error: extracted dir not found: {extracted_dir}", file=sys.stderr)
             sys.exit(1)
         os.makedirs(assets_dir, exist_ok=True)
-        kept = filter_and_copy_assets(catalog, icon_name, extracted_dir, assets_dir, rendition_lookup)
+        kept = filter_and_copy_assets(catalog, icon_name, extracted_dir, assets_dir)
         print(f"Kept {kept} icon-related asset(s) in {assets_dir}")
 
         # Save pre-rendered Icon Image as scoring reference
@@ -143,14 +141,14 @@ def main() -> None:
         print(f"Error: Assets/ not found in {bundle_dir}", file=sys.stderr)
         sys.exit(1)
 
-    layer_filenames, group_specs = resolve_layer_filenames(catalog, icon_name, assets_dir, rendition_lookup)
+    layer_filenames, group_specs = resolve_layer_filenames(catalog, icon_name, assets_dir)
 
     # Reframe bitmap assets that need repositioning within the canvas
     reframed = reframe_assets(catalog, group_specs, assets_dir, layer_filenames)
     if reframed:
         print(f"Reframed {reframed} asset(s) for canvas positioning")
 
-    doc = build_icon_composer_doc(catalog, icon_name, assets_dir, color_lookup, gradient_lookup, rendition_lookup, layer_filenames, group_specs)
+    doc = build_icon_composer_doc(catalog, icon_name, assets_dir, color_lookup, gradient_lookup, layer_filenames, group_specs)
 
     out_path = os.path.join(bundle_dir, "icon.json")
     with open(out_path, "w") as f:
@@ -160,7 +158,7 @@ def main() -> None:
     print(f"Wrote Icon Composer icon.json to {out_path} ({len(doc['groups'])} groups, {total_layers} layers)")
 
     # Detect and report discrepancies
-    discrepancies = collect_discrepancies(catalog, icon_name, assets_dir, doc, rendition_lookup, layer_filenames)
+    discrepancies = collect_discrepancies(catalog, icon_name, assets_dir, doc, layer_filenames)
     discrepancies_json_path = os.path.join(bundle_dir, "discrepancies.json")
 
     if discrepancies:
