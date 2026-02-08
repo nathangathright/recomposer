@@ -128,10 +128,6 @@ These cannot be fixed by improving the code — they are fundamental constraints
 - **Shadow style mapping**: `LayerShadowStyle` values other than 3 ("neutral") are assumed based on Icon Composer's UI order but not confirmed.
 - **Legacy bitmap icons**: Pre-rendered icons (e.g. Boot Camp Assistant) produce a flat single-layer result with no composable structure.
 
-## Test fixture
-
-`Podcasts.icon/` is checked into version control as a reference fixture. Its `icon.json` and `Assets/` should match what `recompose.sh` produces for `/System/Applications/Podcasts.app`.
-
 ## Requirements
 
 - macOS (uses `assetutil`, `defaults`, `sips`, `swiftc`)

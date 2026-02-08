@@ -1,6 +1,9 @@
 # macOS
 .DS_Store
 
+# Icon bundles
+*.icon
+
 # Batch output directory
 output/
 
