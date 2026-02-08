@@ -16,6 +16,18 @@ python3 recompose.py --score-only --icon-name AppIcon \
   --app-path /System/Applications/Podcasts.app Podcasts.icon
 ```
 
+## Verification
+
+After any change to the pipeline scripts or Python modules, run the smoke test. It covers macOS-only composable (Calculator), multi-platform composable (Podcasts), legacy bitmap fallback (Boot Camp Assistant), and two low-scoring edge cases (Safari, Contacts). Watch for new failures, score regressions, and stderr warnings.
+
+```sh
+for app in Calculator Podcasts "Boot Camp Assistant" Safari Contacts; do
+  ./recompose.sh "/System/Applications/$app.app" 2>/dev/null \
+    || ./recompose.sh "/Applications/$app.app" 2>/dev/null \
+    || ./recompose.sh "/System/Applications/Utilities/$app.app" 2>/dev/null
+done
+```
+
 ## Pipeline stages
 
 Each run of `recompose.sh` executes these stages in order:
