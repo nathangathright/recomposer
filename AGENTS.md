@@ -157,7 +157,7 @@ These cannot be fixed by improving the code — they are fundamental constraints
 
 - **One image per layer**: Icon Composer does not support per-appearance image switching. Bitmap dark/tinted variants are lost.
 - **No locale support**: Icon Composer has no mechanism for locale-specific layer variants. Only one glyph can be selected (we pick Latin).
-- **Shadow style mapping**: `LayerShadowStyle` values other than 3 ("neutral") are assumed based on Icon Composer's UI order but not confirmed.
+- **Shadow style mapping**: `LayerShadowStyle` values 2 ("layer-color"/Chromatic) and 3 ("neutral") are confirmed. Values 0 and 1 are not observed in practice. When shadow kind is `"none"`, the opacity value is ignored by Icon Composer.
 - **Legacy bitmap icons**: Pre-rendered icons (e.g. Boot Camp Assistant) produce a flat single-layer result with no composable structure.
 
 ## Requirements

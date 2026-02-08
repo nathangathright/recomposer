@@ -198,7 +198,7 @@ SHADOW_STYLE_MAP = {
     2: "layer-color",   # "Chromatic" in Icon Composer UI
     3: "neutral",
 }
-SHADOW_STYLE_CONFIRMED = {3}  # only these values have been verified
+SHADOW_STYLE_CONFIRMED = {2, 3}  # verified against Icon Composer output
 
 
 # ---------------------------------------------------------------------------
