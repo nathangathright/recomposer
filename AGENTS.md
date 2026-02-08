@@ -24,9 +24,9 @@ After any change to the pipeline scripts or Python modules, run the smoke test. 
 |-----|-------|----------|
 | Script Editor | 85 | Clean composable (happy-path baseline, 4 groups / 4 layers) |
 | Preview | 74 | `bitmap_appearance_variant` + `orphaned_asset` (8 discrepancies, dark + tinted) |
-| Games | 52 | `orphaned_asset` + `unmatched_catalog_layer` (4 discrepancies, 22 layers, most complex) |
-| Dictionary | 54 | `orphaned_asset` (1 discrepancy; locale glyphs handled silently, 2 groups / 2 layers) |
-| Boot Camp Assistant | 34 | `legacy_bitmap_fallback` (single-layer bitmap, non-composable path) |
+| Games | 61 | `orphaned_asset` + `unmatched_catalog_layer` (4 discrepancies, 22 layers, most complex) |
+| Dictionary | 64 | `orphaned_asset` + `locale_variant_unused` (2 discrepancies, 9 locale glyph variants, 2 groups / 2 layers) |
+| Boot Camp Assistant | 34 | `legacy_bitmap_fallback` (1 discrepancy, single-layer bitmap, non-composable path) |
 
 ```sh
 mkdir -p output
@@ -78,7 +78,7 @@ reframe.swift         Bitmap repositioning within canvas (compiled on first run)
 
 lib/
   catalog.py          Catalog parsing. Owns:
-                        - Color/gradient lookup builders
+                        - Color/gradient lookup builders (incl. sRGB → Display P3 conversion)
                         - LayerSpec / GroupSpec data classes
                         - collect_groups_from_catalog() — the core catalog walker
                           (incl. group-level opacity from IconImageStack + layer geometry)

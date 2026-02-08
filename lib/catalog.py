@@ -14,8 +14,48 @@ import sys
 # Color & gradient helpers
 # ---------------------------------------------------------------------------
 
+def _srgb_to_display_p3(r: float, g: float, b: float) -> tuple[float, float, float]:
+    """Convert sRGB color components to Display P3 color components.
+
+    Both sRGB and Display P3 use the same transfer function (gamma curve)
+    but different primaries.  This converts through CIE XYZ (D65) so that
+    the resulting P3 values produce the same visual color as the input
+    sRGB values.  Handles extended-range values (outside 0-1).
+    """
+    def linearize(v: float) -> float:
+        sign = 1.0 if v >= 0 else -1.0
+        v = abs(v)
+        if v <= 0.04045:
+            return sign * v / 12.92
+        return sign * ((v + 0.055) / 1.055) ** 2.4
+
+    def gamma_encode(v: float) -> float:
+        sign = 1.0 if v >= 0 else -1.0
+        v = abs(v)
+        if v <= 0.0031308:
+            return sign * v * 12.92
+        return sign * (1.055 * v ** (1.0 / 2.4) - 0.055)
+
+    # 1. Linearize sRGB
+    rl, gl, bl = linearize(r), linearize(g), linearize(b)
+    # 2. sRGB linear -> XYZ (D65)
+    x = 0.4123908 * rl + 0.3575843 * gl + 0.1804808 * bl
+    y = 0.2126390 * rl + 0.7151687 * gl + 0.0721923 * bl
+    z = 0.0193308 * rl + 0.1191948 * gl + 0.9505322 * bl
+    # 3. XYZ (D65) -> Display P3 linear
+    p3r =  2.4934969 * x - 0.9313836 * y - 0.4027108 * z
+    p3g = -0.8294890 * x + 1.7626641 * y + 0.0236247 * z
+    p3b =  0.0358458 * x - 0.0761724 * y + 0.9568845 * z
+    # 4. Apply P3 gamma
+    return gamma_encode(p3r), gamma_encode(p3g), gamma_encode(p3b)
+
+
 def color_components_to_string(components: list, colorspace: str) -> str:
-    """Format color for Icon Composer (display-p3 or extended-gray)."""
+    """Format color for Icon Composer (display-p3 or extended-gray).
+
+    When the catalog color is in sRGB, the components are converted to
+    Display P3 so that Icon Composer renders the intended visual color.
+    """
     if not components:
         return "display-p3:0.5,0.5,0.5,1.0"
     space = (colorspace or "").lower()
@@ -27,7 +67,9 @@ def color_components_to_string(components: list, colorspace: str) -> str:
         return "display-p3:0.5,0.5,0.5,1.0"
     r, g, b = components[0], components[1], components[2]
     a = components[3] if len(components) > 3 else 1.0
-    # Icon Composer uses display-p3 for all RGB colors
+    # Convert sRGB / extended sRGB to Display P3
+    if "srgb" in space:
+        r, g, b = _srgb_to_display_p3(r, g, b)
     return f"display-p3:{r:.5f},{g:.5f},{b:.5f},{a:.5f}"
 
 

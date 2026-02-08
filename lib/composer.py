@@ -206,7 +206,8 @@ def build_icon_composer_doc(
     groups = []
     total_layers = 0
 
-    # Catalog orders groups top-to-bottom (foreground first); Icon Composer stacks bottom-to-top, so reverse.
+    # Catalog orders groups bottom-to-top (background first);
+    # Icon Composer expects foreground-first, so reverse groups.
     for gs in reversed(group_specs):
         layers = []
         for ls in gs.layers:

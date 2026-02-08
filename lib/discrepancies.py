@@ -9,6 +9,7 @@ machine consumption or rendered as human-readable text.
 """
 
 import os
+import re
 
 from .catalog import APPEARANCE_MAP, LIGHT_APPEARANCES
 
@@ -169,5 +170,63 @@ def collect_discrepancies(
             "layer": short,
             "description": f"{short}: present in catalog but not matched to any asset in icon.json",
         })
+
+    # --- 4. Legacy bitmap fallback ---
+    # If the catalog has no composable layers (Vector/Image), only pre-rendered
+    # "Icon Image" bitmaps, the icon is a legacy bitmap fallback.
+    if not all_catalog_layers:
+        has_icon_image = any(
+            isinstance(e, dict) and e.get("AssetType") == "Icon Image"
+            for e in catalog[1:]
+        )
+        if has_icon_image:
+            results.append({
+                "type": "legacy_bitmap_fallback",
+                "description": (
+                    f"{icon_name}: icon contains only pre-rendered bitmaps "
+                    f"with no composable layers — using highest-resolution "
+                    f"bitmap as single-layer fallback"
+                ),
+            })
+
+    # --- 5. Locale variant unused ---
+    # Detect layers with locale-specific RenditionName variants where only
+    # the Latin variant was selected (other locales are discarded).
+    _locale_re = re.compile(r'-([a-z]{2}(?:-[A-Za-z]+)?)$')
+    layer_stems: dict[str, list[str]] = {}
+    for entry in catalog[1:]:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("AssetType") not in ("Vector", "Image"):
+            continue
+        name = entry.get("Name")
+        rn = entry.get("RenditionName")
+        if not name or not rn:
+            continue
+        if not name.startswith(prefix) and name != icon_name:
+            continue
+        stem, _ = os.path.splitext(rn)
+        layer_stems.setdefault(name, []).append(stem)
+
+    for name, stems in layer_stems.items():
+        unique_stems = list(dict.fromkeys(stems))
+        if len(unique_stems) <= 1:
+            continue
+        locales_found: list[str] = []
+        for s in unique_stems:
+            m = _locale_re.search(s)
+            if m:
+                locales_found.append(m.group(1))
+        if len(locales_found) >= 2:
+            short = name[len(prefix):] if name.startswith(prefix) else name
+            non_latin = [loc for loc in locales_found if loc != "la"]
+            results.append({
+                "type": "locale_variant_unused",
+                "description": (
+                    f"{short}: locale-specific glyph variant(s) "
+                    f"({', '.join(non_latin)}) exist but were not selected "
+                    f"— Latin variant preferred"
+                ),
+            })
 
     return results
