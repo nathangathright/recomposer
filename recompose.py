@@ -9,6 +9,7 @@ Icon Composer.
 
 import json
 import os
+import shutil
 import sys
 
 from lib.catalog import (
@@ -19,6 +20,7 @@ from lib.catalog import (
 from lib.composer import build_icon_composer_doc
 from lib.assets import (
     filter_and_copy_assets,
+    find_prerendered_icon,
     resolve_layer_filenames,
 )
 from lib.scoring import score_visual_fidelity
@@ -130,6 +132,11 @@ def main() -> None:
         os.makedirs(assets_dir, exist_ok=True)
         kept = filter_and_copy_assets(catalog, icon_name, extracted_dir, assets_dir, rendition_lookup)
         print(f"Kept {kept} icon-related asset(s) in {assets_dir}")
+
+        # Save pre-rendered Icon Image as scoring reference
+        ref_src = find_prerendered_icon(catalog, icon_name, extracted_dir)
+        if ref_src:
+            shutil.copy2(ref_src, os.path.join(bundle_dir, "reference.png"))
 
     if not os.path.isdir(assets_dir):
         print(f"Error: Assets/ not found in {bundle_dir}", file=sys.stderr)

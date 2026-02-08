@@ -4,6 +4,9 @@
 # Icon bundles
 *.icon
 
+# Pre-rendered scoring reference (extracted from Assets.car, ~700KB each)
+reference.png
+
 # Batch output directory
 output/
 

@@ -1,9 +1,14 @@
 """
 Visual fidelity scoring via multi-metric pixel comparison.
 
-Compares a generated .icon bundle to the original .app icon by rendering
-both via QuickLook, resizing to 256x256, and computing a weighted blend of
-color RMSE, structural similarity (SSIM), and histogram correlation.
+Compares a generated .icon bundle to the original .app icon by:
+1. Using the pre-rendered reference.png from Assets.car (preferred) or
+   falling back to a QuickLook thumbnail of the .app bundle.
+2. Generating a QuickLook thumbnail of the .icon bundle.
+3. Cropping both images to their content bounds (trimming transparent
+   padding) so framing differences don't penalize the score.
+4. Resizing both to 256x256 and computing a weighted blend of color RMSE,
+   structural similarity (SSIM), and histogram correlation.
 """
 
 import math
@@ -66,6 +71,113 @@ def _read_bmp_pixels(path: str) -> list[tuple[int, int, int]]:
             pixels.append((r, g, b))
 
     return pixels
+
+
+# ---------------------------------------------------------------------------
+# Content-bounds cropping
+# ---------------------------------------------------------------------------
+
+def _read_bmp_raw(path: str) -> tuple[bytes, int, int, int, int, int]:
+    """Read raw BMP metadata. Returns (data, pixel_offset, width, height, bpp, row_size)."""
+    with open(path, "rb") as f:
+        data = f.read()
+    if data[:2] != b"BM":
+        raise ValueError(f"Not a BMP file: {path}")
+    pixel_offset = struct.unpack_from("<I", data, 10)[0]
+    width = struct.unpack_from("<i", data, 18)[0]
+    height = struct.unpack_from("<i", data, 22)[0]
+    bpp = struct.unpack_from("<H", data, 28)[0]
+    bytes_per_pixel = bpp // 8
+    row_size = ((width * bytes_per_pixel + 3) // 4) * 4
+    return data, pixel_offset, width, height, bpp, row_size
+
+
+def _find_content_bounds(bmp_path: str) -> tuple[int, int, int, int] | None:
+    """Find the bounding box of non-transparent pixels in a 32-bit BMP.
+
+    Returns (x, y, width, height) of the content region, or None if the
+    image has no alpha channel or no transparent pixels.
+    """
+    data, pixel_offset, width, height, bpp, row_size = _read_bmp_raw(bmp_path)
+    if bpp != 32:
+        return None
+
+    abs_height = abs(height)
+    min_x, max_x = width, 0
+    min_y, max_y = abs_height, 0
+    bytes_per_pixel = 4
+
+    for row in range(abs_height):
+        y = abs_height - 1 - row if height > 0 else row
+        row_offset = pixel_offset + y * row_size
+        for x in range(width):
+            offset = row_offset + x * bytes_per_pixel
+            a = data[offset + 3]
+            if a > 10:  # non-transparent pixel
+                min_x = min(min_x, x)
+                max_x = max(max_x, x)
+                min_y = min(min_y, row)
+                max_y = max(max_y, row)
+
+    if max_x < min_x:
+        return None  # entirely transparent
+
+    return min_x, min_y, max_x - min_x + 1, max_y - min_y + 1
+
+
+def _crop_and_resize(png_path: str, bmp_out: str, size: int, tmp_dir: str) -> bool:
+    """Crop a PNG to its content bounds and resize to size x size BMP.
+
+    Steps:
+    1. Convert to 32-bit BMP to find content bounds via alpha channel.
+    2. Use sips to crop to content bounds (separate call).
+    3. Resize the cropped result to the target size.
+
+    Returns True on success.
+    """
+    # Convert to BMP to detect content bounds
+    probe_bmp = os.path.join(tmp_dir, "probe.bmp")
+    result = subprocess.run(
+        ["sips", "-s", "format", "bmp", png_path, "--out", probe_bmp],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0 or not os.path.isfile(probe_bmp):
+        return False
+
+    bounds = _find_content_bounds(probe_bmp)
+    os.remove(probe_bmp)
+
+    sz = str(size)
+
+    if bounds:
+        cx, cy, cw, ch = bounds
+        # Step 1: crop to content bounds (produces a cw x ch intermediate)
+        cropped = os.path.join(tmp_dir, "cropped.png")
+        result = subprocess.run(
+            ["sips",
+             "--cropOffset", str(cy), str(cx),
+             "-c", str(ch), str(cw),
+             png_path, "--out", cropped],
+            capture_output=True, text=True,
+        )
+        if result.returncode != 0 or not os.path.isfile(cropped):
+            return False
+        # Step 2: resize to target size and convert to BMP
+        result = subprocess.run(
+            ["sips", "-z", sz, sz,
+             "-s", "format", "bmp", cropped, "--out", bmp_out],
+            capture_output=True, text=True,
+        )
+        os.remove(cropped)
+    else:
+        # No alpha or no transparent pixels — just resize directly
+        result = subprocess.run(
+            ["sips", "-z", sz, sz,
+             "-s", "format", "bmp", png_path, "--out", bmp_out],
+            capture_output=True, text=True,
+        )
+
+    return result.returncode == 0 and os.path.isfile(bmp_out)
 
 
 # ---------------------------------------------------------------------------
@@ -222,9 +334,17 @@ _WEIGHT_HISTOGRAM = 0.10
 def score_visual_fidelity(icon_bundle: str, app_path: str) -> int:
     """Compare .icon bundle to .app icon visually using multi-metric scoring.
 
-    Generates QuickLook thumbnails for both, resizes to 256x256 BMP,
-    then computes a weighted blend of color RMSE, SSIM, and histogram
-    similarity. Returns score 0-100.
+    Uses the pre-rendered reference.png from the bundle (extracted from
+    Assets.car) as the ground-truth image when available, falling back to
+    a QuickLook thumbnail of the .app bundle.  The .icon side always uses
+    QuickLook (which renders the Icon Composer document).
+
+    Both images are cropped to their content bounds (trimming transparent
+    padding) before resizing to 256x256 for comparison.  This eliminates
+    score penalties from framing/padding differences between the reference
+    and the Icon Composer renderer.
+
+    Returns score 0-100.
     """
     script_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     thumbnail_bin = os.path.join(script_dir, "thumbnail")
@@ -234,45 +354,57 @@ def score_visual_fidelity(icon_bundle: str, app_path: str) -> int:
         return 0
 
     with tempfile.TemporaryDirectory() as tmp:
-        app_png = os.path.join(tmp, "app.png")
+        ref_png = os.path.join(tmp, "ref.png")
         icon_png = os.path.join(tmp, "icon.png")
-        app_bmp = os.path.join(tmp, "app.bmp")
+        ref_bmp = os.path.join(tmp, "ref.bmp")
         icon_bmp = os.path.join(tmp, "icon.bmp")
 
-        # Generate QuickLook thumbnails
-        for src, dst in [(app_path, app_png), (icon_bundle, icon_png)]:
+        # --- Reference image (ground truth) ---
+        # Prefer the pre-rendered Icon Image extracted from Assets.car
+        bundle_ref = os.path.join(icon_bundle, "reference.png")
+        if os.path.isfile(bundle_ref):
+            # Copy to tmp so sips can work on it without modifying the bundle
+            import shutil
+            shutil.copy2(bundle_ref, ref_png)
+        else:
+            # Fallback: QuickLook thumbnail of the .app bundle
             result = subprocess.run(
-                [thumbnail_bin, src, dst],
+                [thumbnail_bin, app_path, ref_png],
                 capture_output=True, text=True,
             )
-            if result.returncode != 0 or not os.path.isfile(dst):
-                print(f"Error: failed to generate thumbnail for {src}: {result.stderr.strip()}", file=sys.stderr)
+            if result.returncode != 0 or not os.path.isfile(ref_png):
+                print(f"Error: failed to generate thumbnail for {app_path}: {result.stderr.strip()}", file=sys.stderr)
                 return 0
 
-        # Resize to 256x256 BMP via sips
-        sz = str(_COMPARE_SIZE)
-        for png, bmp in [(app_png, app_bmp), (icon_png, icon_bmp)]:
-            result = subprocess.run(
-                ["sips", "-z", sz, sz,
-                 "-s", "format", "bmp", png, "--out", bmp],
-                capture_output=True, text=True,
-            )
-            if result.returncode != 0 or not os.path.isfile(bmp):
-                print(f"Error: sips resize failed: {result.stderr.strip()}", file=sys.stderr)
-                return 0
+        # --- Icon Composer rendering ---
+        result = subprocess.run(
+            [thumbnail_bin, icon_bundle, icon_png],
+            capture_output=True, text=True,
+        )
+        if result.returncode != 0 or not os.path.isfile(icon_png):
+            print(f"Error: failed to generate thumbnail for {icon_bundle}: {result.stderr.strip()}", file=sys.stderr)
+            return 0
+
+        # Crop to content bounds and resize to comparison size
+        if not _crop_and_resize(ref_png, ref_bmp, _COMPARE_SIZE, tmp):
+            print("Error: failed to crop/resize reference image", file=sys.stderr)
+            return 0
+        if not _crop_and_resize(icon_png, icon_bmp, _COMPARE_SIZE, tmp):
+            print("Error: failed to crop/resize icon image", file=sys.stderr)
+            return 0
 
         # Read pixel data
         try:
-            app_pixels = _read_bmp_pixels(app_bmp)
+            ref_pixels = _read_bmp_pixels(ref_bmp)
             icon_pixels = _read_bmp_pixels(icon_bmp)
         except (ValueError, OSError) as e:
             print(f"Error: failed to read BMP: {e}", file=sys.stderr)
             return 0
 
         # Compute individual metrics
-        rmse = _color_rmse_score(app_pixels, icon_pixels)
-        ssim = _ssim_score(app_pixels, icon_pixels, _COMPARE_SIZE, _COMPARE_SIZE)
-        hist = _histogram_score(app_pixels, icon_pixels)
+        rmse = _color_rmse_score(ref_pixels, icon_pixels)
+        ssim = _ssim_score(ref_pixels, icon_pixels, _COMPARE_SIZE, _COMPARE_SIZE)
+        hist = _histogram_score(ref_pixels, icon_pixels)
 
         # Weighted blend
         score = _WEIGHT_RMSE * rmse + _WEIGHT_SSIM * ssim + _WEIGHT_HISTOGRAM * hist

@@ -331,3 +331,67 @@ def filter_and_copy_assets(
             kept -= 1
 
     return kept
+
+
+# ---------------------------------------------------------------------------
+# Pre-rendered Icon Image extraction (for scoring reference)
+# ---------------------------------------------------------------------------
+
+# Light/default appearances used by pre-rendered Icon Images.
+_LIGHT_APPEARANCES = {"", "UIAppearanceAny", "NSAppearanceNameSystem"}
+
+
+def find_prerendered_icon(
+    catalog: list,
+    icon_name: str,
+    extracted_dir: str,
+) -> str | None:
+    """Find the best pre-rendered 1024x1024 Icon Image PNG in the extracted dir.
+
+    The Assets.car contains composited "Icon Image" entries at various sizes.
+    We want the highest-resolution default-appearance entry to use as a
+    scoring reference.
+
+    Returns the full path to the matched file, or None.
+    """
+    prefix = icon_name + "/"
+
+    # Collect candidate catalog entries: Icon Image, matching icon name, light appearance
+    candidates: list[dict] = []
+    for entry in catalog[1:]:
+        if not isinstance(entry, dict) or entry.get("AssetType") != "Icon Image":
+            continue
+        name = entry.get("Name", "")
+        if name != icon_name and not name.startswith(prefix):
+            continue
+        appearance = entry.get("Appearance", "")
+        if appearance not in _LIGHT_APPEARANCES:
+            continue
+        pw = entry.get("PixelWidth", 0)
+        ph = entry.get("PixelHeight", 0)
+        rn = entry.get("RenditionName", "")
+        if pw >= 1024 and ph >= 1024 and rn:
+            candidates.append(entry)
+
+    if not candidates:
+        return None
+
+    # Prefer scale=1 (the canonical composite render) over scale=2
+    candidates.sort(key=lambda e: (e.get("Scale", 1) == 1, e.get("PixelWidth", 0) * e.get("PixelHeight", 0)), reverse=True)
+    best = candidates[0]
+
+    # Match the RenditionName stem to an extracted file
+    rn = best["RenditionName"]
+    stem, _ = os.path.splitext(rn)
+    stem_lower = stem.lower()
+
+    for fn in os.listdir(extracted_dir):
+        if not fn.lower().endswith(".png"):
+            continue
+        base, _ = os.path.splitext(fn)
+        base_lower = base.lower()
+        # Exact stem match, or stem + _Normal suffix (act adds this)
+        if base_lower == stem_lower or base_lower.startswith(stem_lower + "_"):
+            return os.path.join(extracted_dir, fn)
+
+    return None

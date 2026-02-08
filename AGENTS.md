@@ -18,15 +18,30 @@ python3 recompose.py --score-only --icon-name AppIcon \
 
 ## Verification
 
-After any change to the pipeline scripts or Python modules, run the smoke test. It covers macOS-only composable (Calculator), multi-platform composable (Podcasts), legacy bitmap fallback (Boot Camp Assistant), and two low-scoring edge cases (Safari, Contacts). Watch for new failures, score regressions, and stderr warnings.
+After any change to the pipeline scripts or Python modules, run the smoke test. It covers all emitted discrepancy types and structural edge cases. Watch for new failures, score regressions, and stderr warnings.
+
+| App | Score | Coverage |
+|-----|-------|----------|
+| Script Editor | 84 | Clean composable (happy-path baseline, 4 groups / 4 layers) |
+| Preview | 74 | `bitmap_appearance_variant` + `orphaned_asset` (8 discrepancies, dark + tinted) |
+| Games | 52 | `orphaned_asset` + `unmatched_catalog_layer` (4 discrepancies, 22 layers, most complex) |
+| Dictionary | 54 | `orphaned_asset` (1 discrepancy; locale glyphs handled silently, 2 groups / 2 layers) |
+| Boot Camp Assistant | 34 | `legacy_bitmap_fallback` (single-layer bitmap, non-composable path) |
 
 ```sh
-for app in Calculator Podcasts "Boot Camp Assistant" Safari Contacts; do
-  ./recompose.sh "/System/Applications/$app.app" 2>/dev/null \
-    || ./recompose.sh "/Applications/$app.app" 2>/dev/null \
-    || ./recompose.sh "/System/Applications/Utilities/$app.app" 2>/dev/null
+mkdir -p output
+cd output
+for app in "Script Editor" Preview Games Dictionary "Boot Camp Assistant"; do
+  ../recompose.sh "/System/Applications/$app.app" 2>/dev/null \
+    || ../recompose.sh "/Applications/$app.app" 2>/dev/null \
+    || ../recompose.sh "/System/Applications/Utilities/$app.app" 2>/dev/null
 done
 ```
+
+Note: Script Editor and Boot Camp Assistant live under `/System/Applications/Utilities/`,
+not `/System/Applications/`. The fallback chain above handles this automatically.
+`act` is not on `$PATH` by default — the script finds it at
+`/Applications/Asset Catalog Tinkerer.app/Contents/MacOS/act`.
 
 ## Pipeline stages
 
